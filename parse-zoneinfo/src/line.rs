@@ -869,7 +869,11 @@ impl LineParser {
             Ok(TimeSpecAndType(TimeSpec::Zero, TimeType::Wall))
         } else if input.chars().all(|c| c == '-' || c.is_ascii_digit()) {
             Ok(TimeSpecAndType(
-                TimeSpec::Hours(input.parse().unwrap()),
+                TimeSpec::Hours(
+                    input
+                        .parse()
+                        .map_err(|_| Error::InvalidTimeSpecAndType(input.to_string()))?,
+                ),
                 TimeType::Wall,
             ))
         } else if let Some(caps) = self.hm_field.captures(input) {
@@ -923,7 +927,11 @@ impl LineParser {
     fn parse_dayspec(&self, input: &str) -> Result<DaySpec, Error> {
         // Parse the field as a number if it vaguely resembles one.
         if input.chars().all(|c| c.is_ascii_digit()) {
-            Ok(DaySpec::Ordinal(input.parse().unwrap()))
+            Ok(DaySpec::Ordinal(
+                input
+                    .parse()
+                    .map_err(|_| Error::InvalidDaySpec(input.to_string()))?,
+            ))
         }
         // Check if it stars with ‘last’, and trim off the first four bytes if
         // it does. (Luckily, the file is ASCII, so ‘last’ is four bytes)
@@ -933,8 +941,13 @@ impl LineParser {
         }
         // Check if it’s a relative expression with the regex.
         else if let Some(caps) = self.day_field.captures(input) {
-            let weekday = caps.name("weekday").unwrap().as_str().parse().unwrap();
-            let day = caps.name("day").unwrap().as_str().parse().unwrap();
+            let weekday = caps.name("weekday").unwrap().as_str().parse()?;
+            let day = caps
+                .name("day")
+                .unwrap()
+                .as_str()
+                .parse()
+                .map_err(|_| Error::InvalidTimeSpecAndType(input.to_string()))?;
 
             match caps.name("sign").unwrap().as_str() {
                 "<=" => Ok(DaySpec::LastOnOrBefore(weekday, day)),
@@ -1041,7 +1054,7 @@ impl LineParser {
             )),
             (Some(y), _, _, _) => Some(ChangeTime::UntilYear(y.as_str().parse()?)),
             (None, None, None, None) => None,
-            _ => unreachable!("Out-of-order capturing groups!"),
+            _ => return Err(Error::NotParsedAsZoneLine),
         };
 
         Ok(ZoneInfo {
@@ -1322,6 +1335,13 @@ mod tests {
             time:        Some(ChangeTime::UntilYear(Year::Number(1919))),
         },
     })));
+
+    test!(bad_dayspec: "Rule	Greece	1976	only	-	Oct	999	2:00s	0	-" => Err(Error::InvalidDaySpec("999".to_string())));
+    test!(bad_timespec: "Rule  US    1967  1973  ‐     Apr  lastSun  --  1:00  D" => Err(Error::InvalidTimeSpecAndType("--".to_string())));
+    test!(bad_day: "Rule	EU	1977	1980	-	Apr	Sun>=999	 1:00u	1:00	S" => Err(Error::InvalidTimeSpecAndType("Sun>=999".to_string())));
+    test!(bad_weekday: "Rule	EU	1977	1980	-	Apr	Sonn>=1	 1:00u	1:00	S" => Err(Error::FailedWeekdayParse("sonn".to_string())));
+
+    test!(bad_zone: "   1:30    -   Apr Sun>=1" => Err(Error::NotParsedAsZoneLine));
 
     #[test]
     fn negative_offsets() {
